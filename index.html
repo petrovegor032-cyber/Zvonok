@@ -3,111 +3,106 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>📞 WebRTC звонок без сервера</title>
+    <title>📞 PeerJS звонок</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <style>
-        body { font-family: system-ui; background: #0a2f1f; padding: 20px; }
-        .card { background: #1e2a1c; border-radius: 32px; padding: 24px; max-width: 500px; margin: 0 auto; color: #ffefb9; }
-        button { background: #5a3e1b; border: none; color: white; padding: 12px 20px; border-radius: 60px; width: 100%; margin: 8px 0; cursor: pointer; }
-        input { width: 100%; padding: 12px; border-radius: 60px; background: #2c2b1f; color: white; margin: 8px 0; }
-        .status { background: #00000066; padding: 10px; border-radius: 40px; text-align: center; margin: 16px 0; }
+        body { font-family: system-ui; background: #0a2f1f; padding: 20px; text-align: center; color: white; }
+        input, button { padding: 12px; margin: 8px; border-radius: 30px; border: none; }
+        button { background: #5a3e1b; color: white; cursor: pointer; }
+        .status { background: #1e2a1c; padding: 10px; border-radius: 30px; margin: 16px; }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/webconnect@0.0.9/dist/umd/webconnect.js"></script>
 </head>
 <body>
-<div class="card">
-    <h1>📞 Тест звонка</h1>
-    <div class="status" id="status">⏳ Подключение к сети...</div>
-    <div><strong>🔑 Ваш ID:</strong> <span id="myId">...</span></div>
-    <input type="text" id="targetId" placeholder="Введите ID собеседника">
-    <button id="callBtn">🔊 ПОЗВОНИТЬ</button>
+    <h1>📞 Тест звонка (PeerJS)</h1>
+    <div class="status" id="status">Подключение...</div>
+    <div><strong>Ваш ID:</strong> <span id="myId">загрузка...</span></div>
+    <input type="text" id="targetId" placeholder="ID собеседника">
+    <button id="callBtn">🔊 Позвонить</button>
     <button id="hangupBtn" disabled>❌ Завершить</button>
-</div>
-<script>
-    let localStream = null;
-    let peerConnection = null;
-    let remoteId = null;
 
-    const statusDiv = document.getElementById('status');
-    const myIdSpan = document.getElementById('myId');
-    const callBtn = document.getElementById('callBtn');
-    const hangupBtn = document.getElementById('hangupBtn');
-    const targetInput = document.getElementById('targetId');
-
-    // Инициализация webconnect (без сервера!)
-    const connect = webconnect({ appName: "ZvonokTest", channelName: "public" });
-
-    connect.onConnect(async (attr) => {
-        statusDiv.innerHTML = '🟢 Соединение установлено!';
-        myIdSpan.innerText = attr.connectId;
+    <script>
+        const statusDiv = document.getElementById('status');
+        const myIdSpan = document.getElementById('myId');
+        const targetInput = document.getElementById('targetId');
+        const callBtn = document.getElementById('callBtn');
+        const hangupBtn = document.getElementById('hangupBtn');
         
-        // Запрашиваем микрофон
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    });
+        let localStream = null;
+        let peer = null;
+        let currentCall = null;
 
-    connect.onReceive(async (data, attr) => {
-        if (data.type === 'offer') {
-            // Входящий звонок
+        // Инициализация PeerJS (бесплатный сервер)
+        const peerId = 'user_' + Math.random().toString(36).substr(2, 8);
+        peer = new Peer(peerId, {
+            host: '0.peerjs.com',
+            port: 443,
+            secure: true
+        });
+
+        peer.on('open', () => {
+            myIdSpan.innerText = peerId;
+            statusDiv.innerHTML = '🟢 Готов, можно звонить!';
+        });
+
+        peer.on('call', async (call) => {
             statusDiv.innerHTML = '📞 Входящий звонок...';
-            remoteId = attr.connectId;
-            await acceptCall(JSON.parse(data.sdp));
-        } else if (data.type === 'answer') {
-            await peerConnection.setRemoteDescription(JSON.parse(data.sdp));
-        } else if (data.type === 'candidate') {
-            await peerConnection.addIceCandidate(JSON.parse(data.candidate));
-        }
-    });
+            // Запрашиваем микрофон
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            call.answer(localStream);
+            currentCall = call;
+            
+            call.on('stream', (remoteStream) => {
+                const audio = new Audio();
+                audio.srcObject = remoteStream;
+                audio.autoplay = true;
+                statusDiv.innerHTML = '🎧 Разговор идёт...';
+                hangupBtn.disabled = false;
+            });
+            
+            call.on('close', () => {
+                statusDiv.innerHTML = '🔴 Звонок завершён';
+                hangupBtn.disabled = true;
+            });
+        });
 
-    async function makeCall() {
-        const target = targetInput.value.trim();
-        if (!target) { statusDiv.innerHTML = '⚠️ Введите ID'; return; }
-        
-        remoteId = target;
-        statusDiv.innerHTML = '📞 Звонок...';
-        
-        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-        
-        peerConnection.onicecandidate = (e) => {
-            if (e.candidate) {
-                connect.Send(JSON.stringify({ type: 'candidate', candidate: e.candidate.toJSON() }), { connectId: remoteId });
+        peer.on('error', (err) => {
+            statusDiv.innerHTML = '❌ Ошибка: ' + err.type;
+            console.error(err);
+        });
+
+        // Исходящий звонок
+        callBtn.onclick = async () => {
+            const target = targetInput.value.trim();
+            if (!target) {
+                statusDiv.innerHTML = '⚠️ Введите ID собеседника';
+                return;
             }
+            
+            statusDiv.innerHTML = '📞 Звоню...';
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            const call = peer.call(target, localStream);
+            currentCall = call;
+            
+            call.on('stream', (remoteStream) => {
+                const audio = new Audio();
+                audio.srcObject = remoteStream;
+                audio.autoplay = true;
+                statusDiv.innerHTML = '🎧 Разговор идёт...';
+                hangupBtn.disabled = false;
+            });
+            
+            call.on('close', () => {
+                statusDiv.innerHTML = '🔴 Звонок завершён';
+                hangupBtn.disabled = true;
+            });
         };
-        
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        connect.Send(JSON.stringify({ type: 'offer', sdp: JSON.stringify(offer) }), { connectId: remoteId });
-        
-        hangupBtn.disabled = false;
-    }
 
-    async function acceptCall(offerSdp) {
-        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-        
-        peerConnection.onicecandidate = (e) => {
-            if (e.candidate) {
-                connect.Send(JSON.stringify({ type: 'candidate', candidate: e.candidate.toJSON() }), { connectId: remoteId });
-            }
+        hangupBtn.onclick = () => {
+            if (currentCall) currentCall.close();
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            hangupBtn.disabled = true;
         };
-        
-        await peerConnection.setRemoteDescription(offerSdp);
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        connect.Send(JSON.stringify({ type: 'answer', sdp: JSON.stringify(answer) }), { connectId: remoteId });
-        
-        statusDiv.innerHTML = '🎧 Разговор...';
-        hangupBtn.disabled = false;
-    }
-
-    function hangUp() {
-        if (peerConnection) peerConnection.close();
-        peerConnection = null;
-        statusDiv.innerHTML = '🔴 Звонок завершён';
-        hangupBtn.disabled = true;
-    }
-
-    callBtn.onclick = makeCall;
-    hangupBtn.onclick = hangUp;
-</script>
+    </script>
 </body>
 </html>
